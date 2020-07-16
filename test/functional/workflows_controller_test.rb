@@ -525,6 +525,22 @@ class WorkflowsControllerTest < ActionController::TestCase
     end
   end
 
+  test 'handles error when generating diagram from CWL' do
+    with_config_value(:cwl_viewer_url, 'http://localhost:8080/cwl_viewer') do
+      wf = Factory(:generated_galaxy_no_diagram_ro_crate_workflow)
+      login_as(wf.contributor)
+      refute wf.diagram_exists?
+      assert wf.can_render_diagram?
+
+      VCR.use_cassette('workflows/cwl_viewer_error') do
+        get :diagram, params: { id: wf.id }
+      end
+
+      assert_response :not_found
+      refute wf.diagram_exists?
+    end
+  end
+
   test 'does not render diagram if not in RO crate' do
     wf = Factory(:nf_core_ro_crate_workflow)
     login_as(wf.contributor)
@@ -594,7 +610,7 @@ class WorkflowsControllerTest < ActionController::TestCase
     login_as(person)
     blob = Factory(:content_blob)
     session[:uploaded_content_blob_id] = blob.id
-    workflow =  {title: 'workflow', project_ids: [person.projects.first.id], discussion_links_attributes:[{url: "http://www.slack.com/"}]}
+    workflow =  {title: 'workflow', project_ids: [person.projects.first.id], discussion_links_attributes:[{url: "http://www.slack.com/", label:'our slack'}]}
     assert_difference('AssetLink.discussion.count') do
       assert_difference('Workflow.count') do
           post :create_metadata, params: {workflow: workflow, content_blob_id: blob.id.to_s, policy_attributes: { access_type: Policy::VISIBLE }}
@@ -602,15 +618,43 @@ class WorkflowsControllerTest < ActionController::TestCase
     end
     workflow = assigns(:workflow)
     assert_equal 'http://www.slack.com/', workflow.discussion_links.first.url
+    assert_equal 'our slack',workflow.discussion_links.first.label
     assert_equal AssetLink::DISCUSSION, workflow.discussion_links.first.link_type
   end
 
-  test 'should show discussion link' do
+  test 'should show discussion link without label' do
     asset_link = Factory(:discussion_link)
+    workflow = Factory(:workflow, discussion_links: [asset_link], policy: Factory(:public_policy, access_type: Policy::VISIBLE))
+    assert_equal [asset_link],workflow.discussion_links
+    get :show, params: { id: workflow }
+    assert_response :success
+    assert_select 'div.panel-heading', text: /Discussion Channel/, count: 1
+    assert_select 'div.discussion-link', count:1 do
+      assert_select 'a[href=?]',asset_link.url,text:asset_link.url
+    end
+
+    #blank rather than nil
+    asset_link.update_column(:label,'')
+    workflow.reload
+    assert_equal [asset_link],workflow.discussion_links
+    get :show, params: { id: workflow }
+    assert_response :success
+    assert_select 'div.panel-heading', text: /Discussion Channel/, count: 1
+    assert_select 'div.discussion-link', count:1 do
+      assert_select 'a[href=?]',asset_link.url,text:asset_link.url
+    end
+  end
+
+
+  test 'should show discussion link with label' do
+    asset_link = Factory(:discussion_link, label:'discuss-label')
     workflow = Factory(:workflow, discussion_links: [asset_link], policy: Factory(:public_policy, access_type: Policy::VISIBLE))
     get :show, params: { id: workflow }
     assert_response :success
     assert_select 'div.panel-heading', text: /Discussion Channel/, count: 1
+    assert_select 'div.discussion-link', count:1 do
+      assert_select 'a[href=?]',asset_link.url,text:'discuss-label'
+    end
   end
 
   test 'should update workflow with new discussion link' do
@@ -620,11 +664,12 @@ class WorkflowsControllerTest < ActionController::TestCase
     assert_nil workflow.discussion_links.first
     assert_difference('AssetLink.discussion.count') do
       assert_difference('ActivityLog.count') do
-        put :update, params: { id: workflow.id, workflow: { discussion_links_attributes:[{url: "http://www.slack.com/"}] } }
+        put :update, params: { id: workflow.id, workflow: { discussion_links_attributes:[{url: "http://www.slack.com/", label:'our slack'}] } }
       end
     end
     assert_redirected_to workflow_path(workflow = assigns(:workflow))
     assert_equal 'http://www.slack.com/', workflow.discussion_links.first.url
+    assert_equal 'our slack',workflow.discussion_links.first.label
   end
 
   test 'should update workflow with edited discussion link' do
