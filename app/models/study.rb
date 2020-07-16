@@ -27,7 +27,7 @@ class Study < ApplicationRecord
 
   belongs_to :person_responsible, :class_name => 'Person'
 
-  validates :investigation, presence: { message: 'Investigation is blank or invalid' }, projects: true
+  validates :investigation, presence: {message: 'Investigation is blank or invalid'}, projects: true
 
   enforce_authorization_on_association :investigation, :view
 
@@ -80,7 +80,6 @@ class Study < ApplicationRecord
             data: generate_metadata(data)
           )
         )
-        study_exist(study_id)
       end
     end
     studies
@@ -88,22 +87,22 @@ class Study < ApplicationRecord
 
   def self.generate_metadata(data)
     metadata = {
-      id: data[0].value,
-      study_start_date: data[3].value,
-      study_end_date: data[4].value,
-      contact_institution: data[5].value,
-      geographic_location_country: data[6].value,
-      experimental_site_name: data[7].value,
-      latitude: data[8].value,
-      longitude: data[9].value,
-      altitude: data[10].value,
-      description_of_the_experimental_design: data[11].value,
-      type_of_experimental_design: data[12].value,
-      observation_unit_level_hierarchy: data[13].value,
-      observation_unit_description: data[14].value,
-      description_of_growth_facility: data[15].value,
-      type_of_growth_facility: data[16].value,
-      cultural_practices: data[17].value
+        id: data[0].value,
+        study_start_date: data[3].value,
+        study_end_date: data[4].value,
+        contact_institution: data[5].value,
+        geographic_location_country: data[6].value,
+        experimental_site_name: data[7].value,
+        latitude: data[8].value,
+        longitude: data[9].value,
+        altitude: data[10].value,
+        description_of_the_experimental_design: data[11].value,
+        type_of_experimental_design: data[12].value,
+        observation_unit_level_hierarchy: data[13].value,
+        observation_unit_description: data[14].value,
+        description_of_growth_facility: data[15].value,
+        type_of_growth_facility: data[16].value,
+        cultural_practices: data[17].value
     }
     metadata
   end
@@ -129,14 +128,52 @@ class Study < ApplicationRecord
     [study_data, studies]
   end
 
-  def self.study_exist(study_metadata_id)
+  def self.get_existing_studies(studies)
     existing_studies = []
-    find_metadata = CustomMetadata.where('json_metadata LIKE ?', "%#{study_metadata_id}%").last
-    unless find_metadata.nil?
-      study_id = find_metadata.item_id
-      study = Study.where(id: study_id)
-      existing_studies << study
+    studies.each do |study|
+      study_metadata_id = study.custom_metadata.data[:id]
+      find_metadata = CustomMetadata.where('json_metadata LIKE ?', "%\"id\":\"#{study_metadata_id}\"%").all
+      next if find_metadata.nil?
+
+      find_metadata.each do |metadata|
+
+        old_study = {
+            id: metadata.item_id.to_s,
+            metadata_id: metadata.id,
+            study_miappe_id: study_metadata_id
+        }
+        existing_studies << old_study
+      end
+
     end
+    existing_studies.to_json
+  end
+
+  def self.get_license(studies_file)
+
+    default_license = 'test'
+    investigation_license_id = ''
+    license_row_index = 7
+    columns = [2]
+    parsed_sheet = Seek::Templates::StudiesReader.new(studies_file)
+    parsed_sheet.each_record(2, columns) do |index, data|
+      investigation_license_id = data[0].value if index == license_row_index
+    end
+    licenses_ids = JSON.parse(File.read(File.join(Rails.root, 'public', 'od_licenses.json'))).keys
+
+
+    normalize_license_id(default_license)
+
+    licenses_ids.each do |license_id|
+      if normalize_license_id(license_id) == normalize_license_id(investigation_license_id)
+        return license_id
+      end
+    end
+    default_license
+  end
+
+  def self.normalize_license_id(license_id)
+    license_id.remove('-').remove('.').remove(' ').upcase
   end
 
   def self.check_study_is_valid(study, metadata)
@@ -173,7 +210,7 @@ class Study < ApplicationRecord
   end
 
   def self.filter_by_projects(projects)
-    joins(:projects).where(investigations: { investigations_projects: { project_id: projects } })
+    joins(:projects).where(investigations: {investigations_projects: {project_id: projects}})
   end
 
   def related_publication_ids
